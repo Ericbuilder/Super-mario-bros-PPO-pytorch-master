@@ -1,5 +1,4 @@
 """
-@author: Viet Nguyen <nhviet1009@gmail.com>
 Environment setup for Super Mario Bros (pure Gym v0.21 API)
 """
 
