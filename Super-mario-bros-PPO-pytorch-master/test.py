@@ -1,5 +1,4 @@
 """
-@author: Viet Nguyen <nhviet1009@gmail.com>
 Test PPO on Super Mario Bros with video recording (Gym v0.21 compatible)
 """
 
