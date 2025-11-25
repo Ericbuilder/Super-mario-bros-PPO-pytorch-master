@@ -1,5 +1,4 @@
 """
-@author: Viet Nguyen <nhviet1009@gmail.com>
 PPO Training for Super Mario Bros (Gym v0.21 compatible)
 """
 
