@@ -86,7 +86,7 @@ def test(opt):
     # Update video filename to include level info
     video_path = os.path.join(opt.output_path, f"test_video_w{opt.world}_s{opt.stage}.mp4")
 
-    # Create environment (Specific Level) 使用 v3
+    # Create environment (Specific Level) 
     env_id = f"SuperMarioBros-{opt.world}-{opt.stage}-v3"
     try:
         print(f"🚀 Loading environment: {env_id}")
