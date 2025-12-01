@@ -93,7 +93,7 @@ def train(opt):
         model.cuda()
     model.share_memory()
 
-    # 启动评估进程（评估内已禁用渲染；若仍使用旧 process.py，请确保其不调用 env.render）
+    # 启动评估进程（评估内已禁用渲染）
     process = mp.Process(target=eval, args=(opt, model, num_states, num_actions))
     process.start()
 
@@ -230,14 +230,6 @@ def train(opt):
         # 自动切关逻辑
         if level_cleared_in_batch:
             print(f"🎉 Level {curr_world}-{curr_stage} CLEARED! Switching level...")
-
-            # 关卡专用模型（同样要求通过率 >= 70%）
-            if len(recent_passes) == recent_passes.maxlen and pass_rate >= 0.7:
-                save_path = os.path.join(opt.saved_path, f"ppo_cleared_{curr_world}_{curr_stage}.pth")
-                torch.save(model.state_dict(), save_path)
-                print(f"🏆 Pass rate >= 70%. Checkpoint saved: {save_path}")
-            else:
-                print("🟡 Pass rate below 70%. Skip saving checkpoint for this level.")
 
             # 进入下一关
             curr_stage += 1
