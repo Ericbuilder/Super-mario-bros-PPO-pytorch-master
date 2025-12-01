@@ -13,7 +13,7 @@ import numpy as np
 import shutil
 from gym_super_mario_bros.actions import RIGHT_ONLY
 from collections import deque
-opt.saved_path = "/kaggle/working"
+
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -32,7 +32,8 @@ def get_args():
     parser.add_argument("--save_interval", type=int, default=50)  # 保留但不按间隔保存
     parser.add_argument("--max_actions", type=int, default=200)
     parser.add_argument("--log_path", type=str, default="tensorboard/ppo_super_mario_bros")
-    parser.add_argument("--saved_path", type=str, default="trained_models")
+    # 设置为 Kaggle 工作目录，确保可下载
+    parser.add_argument("--saved_path", type=str, default="/kaggle/working")
     parser.add_argument("--output_path", type=str, default=None)
 
     # Starting level
@@ -222,7 +223,7 @@ def train(opt):
 
         # ===== 条件保存通用模型（仅当最近 5 个 episode 通过率 >= 0.7）=====
         if len(recent_passes) == recent_passes.maxlen and pass_rate >= 0.7:
-            save_path = os.path.join(opt.saved_path, "ppo_super_mario_bros_continuous")
+            save_path = os.path.join(opt.saved_path, "ppo_super_mario_bros_continuous.pth")
             torch.save(model.state_dict(), save_path)
             print(f"✅ Pass rate >= 70%. General model saved to {save_path}")
 
@@ -232,7 +233,7 @@ def train(opt):
 
             # 仅当最近 5 个 episode 通过率 >= 70% 时，保存关卡专用模型
             if len(recent_passes) == recent_passes.maxlen and pass_rate >= 0.7:
-                save_path = os.path.join(opt.saved_path, f"ppo_cleared_{curr_world}_{curr_stage}")
+                save_path = os.path.join(opt.saved_path, f"ppo_cleared_{curr_world}_{curr_stage}.pth")
                 torch.save(model.state_dict(), save_path)
                 print(f"🏆 Pass rate >= 70%. Checkpoint saved: {save_path}")
             else:
