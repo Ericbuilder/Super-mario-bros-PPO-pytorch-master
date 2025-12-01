@@ -1,4 +1,5 @@
 import os
+model.save(os.path.join("/kaggle/working", "mario_model.pth"))
 
 os.environ['OMP_NUM_THREADS'] = '1'
 import argparse
