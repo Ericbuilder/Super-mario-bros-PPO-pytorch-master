@@ -25,7 +25,8 @@ class Monitor:
 
     def record(self, image_array):
         if self.pipe and self.pipe.stdin:
-            self.pipe.stdin.write(image_array.tostring())
+            # 使用 tobytes()，避免 tostring() 过时
+            self.pipe.stdin.write(image_array.tobytes())
 
     def close(self):
         if self.pipe:
@@ -179,7 +180,8 @@ class CustomSkipFrame(Wrapper):
 
 # ===== Create Environment (Force RIGHT_ONLY actions) =====
 def create_train_env(actions, world, stage, output_path=None):
-    env_id = f"SuperMarioBros-{world}-{stage}-v0"
+    # 统一使用 v3，减少旧 API 与渲染警告
+    env_id = f"SuperMarioBros-{world}-{stage}-v3"
     try:
         env = gym_super_mario_bros.make(env_id)
     except Exception as e:
