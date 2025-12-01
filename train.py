@@ -1,6 +1,10 @@
+# train.py
 import os
-
 os.environ['OMP_NUM_THREADS'] = '1'
+
+# 在导入任何会触发 pyglet/gym 的模块之前启用无头模式
+import src.headless  # 确保 pyglet.options['headless'] = True 生效
+
 import argparse
 import torch
 from src.env import MultipleEnvironments
@@ -32,9 +36,9 @@ def get_args():
     parser.add_argument("--save_interval", type=int, default=50)  # 保留但不按间隔保存
     parser.add_argument("--max_actions", type=int, default=200)
     parser.add_argument("--log_path", type=str, default="tensorboard/ppo_super_mario_bros")
-    # 设置为 Kaggle 工作目录，确保可下载
+    # 必须改项：统一保存与输出路径到 Kaggle 工作目录
     parser.add_argument("--saved_path", type=str, default="/kaggle/working")
-    parser.add_argument("--output_path", type=str, default=None)
+    parser.add_argument("--output_path", type=str, default="/kaggle/working/output")
 
     # Starting level
     parser.add_argument("--world", type=int, default=1)
@@ -63,10 +67,13 @@ def train(opt):
     else:
         torch.manual_seed(123)
 
+    # 确保日志与保存目录存在（saved_path 已默认指向 /kaggle/working）
     if os.path.isdir(opt.log_path):
         shutil.rmtree(opt.log_path)
     os.makedirs(opt.log_path, exist_ok=True)
     os.makedirs(opt.saved_path, exist_ok=True)
+    if opt.output_path:
+        os.makedirs(opt.output_path, exist_ok=True)
 
     mp = _mp.get_context("spawn")
 
@@ -89,7 +96,7 @@ def train(opt):
         model.cuda()
     model.share_memory()
 
-    # Start evaluation process
+    # Start evaluation process (eval 会接收 opt.output_path，且已在 src/process.py 中移除 env.render())
     process = mp.Process(target=eval, args=(opt, model, num_states, num_actions))
     process.start()
 
@@ -223,6 +230,7 @@ def train(opt):
 
         # ===== 条件保存通用模型（仅当最近 5 个 episode 通过率 >= 0.7）=====
         if len(recent_passes) == recent_passes.maxlen and pass_rate >= 0.7:
+            # 必须改项：保存文件名统一带 .pth，保存目录统一为 opt.saved_path（默认 /kaggle/working）
             save_path = os.path.join(opt.saved_path, "ppo_super_mario_bros_continuous.pth")
             torch.save(model.state_dict(), save_path)
             print(f"✅ Pass rate >= 70%. General model saved to {save_path}")
