@@ -28,7 +28,7 @@ def eval(opt, global_model, num_states, num_actions):
     else:
         actions = COMPLEX_MOVEMENT
 
-    # 创建评估环境，传入 output_path 以保证路径一致（例如 /kaggle/working/output）
+    # 创建评估环境，传入 output_path 以保证路径一致
     env = create_train_env(actions, opt.world, opt.stage)
 
     local_model = PPO(num_states, num_actions)
@@ -60,7 +60,7 @@ def eval(opt, global_model, num_states, num_actions):
         # 与环境交互（旧 Gym API）
         state_np, reward, done, info = env.step(action)
 
-        # 可选：打印关卡完成信息
+        # 打印关卡完成信息
         if info.get("flag_get", False):
             world = info.get("world", "?")
             stage = info.get("stage", "?")
