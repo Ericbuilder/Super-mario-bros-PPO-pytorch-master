@@ -1,5 +1,4 @@
 import os
-model.save(os.path.join("/kaggle/working", "mario_model.pth"))
 
 os.environ['OMP_NUM_THREADS'] = '1'
 import argparse
@@ -14,7 +13,7 @@ import numpy as np
 import shutil
 from gym_super_mario_bros.actions import RIGHT_ONLY
 from collections import deque
-
+opt.saved_path = "/kaggle/working"
 
 def get_args():
     parser = argparse.ArgumentParser()
