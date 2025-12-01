@@ -2,8 +2,11 @@
 import os
 os.environ['OMP_NUM_THREADS'] = '1'
 
-# 在导入任何会触发 pyglet/gym 的模块之前启用无头模式
-import src.headless  # 确保 pyglet.options['headless'] = True 生效
+# 无头模式（防止 Kaggle 渲染相关问题）
+import src.headless  # 确保 pyglet.options['headless'] = True 在任何 gym/nes_py 导入前生效
+
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 import argparse
 import torch
@@ -36,11 +39,10 @@ def get_args():
     parser.add_argument("--save_interval", type=int, default=50)  # 保留但不按间隔保存
     parser.add_argument("--max_actions", type=int, default=200)
     parser.add_argument("--log_path", type=str, default="tensorboard/ppo_super_mario_bros")
-    # 必须改项：统一保存与输出路径到 Kaggle 工作目录
+    # 统一保存路径到 Kaggle 工作目录
     parser.add_argument("--saved_path", type=str, default="/kaggle/working")
-    parser.add_argument("--output_path", type=str, default="/kaggle/working/output")
 
-    # Starting level
+    # 起始关卡
     parser.add_argument("--world", type=int, default=1)
     parser.add_argument("--stage", type=int, default=1)
 
@@ -48,15 +50,12 @@ def get_args():
     return args
 
 
-# ===== 动态学习率设置函数（仅添加此功能，其余保持不变）=====
+# ===== 动态学习率设置函数 =====
 def get_dynamic_lr(world, stage):
-    # 1-1 到 2-4
     if world <= 2:
         return 1e-3
-    # 3-1 到 5-4
     elif 3 <= world <= 5:
         return 1e-4
-    # 6-1 之后更精确（更小的学习率）
     else:
         return 5e-5
 
@@ -67,27 +66,25 @@ def train(opt):
     else:
         torch.manual_seed(123)
 
-    # 确保日志与保存目录存在（saved_path 已默认指向 /kaggle/working）
+    # 目录准备（只保留日志与模型保存，不涉及视频）
     if os.path.isdir(opt.log_path):
         shutil.rmtree(opt.log_path)
     os.makedirs(opt.log_path, exist_ok=True)
     os.makedirs(opt.saved_path, exist_ok=True)
-    if opt.output_path:
-        os.makedirs(opt.output_path, exist_ok=True)
 
     mp = _mp.get_context("spawn")
 
     # 强制使用 RIGHT_ONLY
     opt.action_type = "right"
 
-    # Initialize starting level
+    # 初始化关卡
     curr_world = opt.world
     curr_stage = opt.stage
 
     print(f"🚀 Starting training on World {curr_world}-{curr_stage}")
-    envs = MultipleEnvironments(opt.action_type, opt.num_processes, curr_world, curr_stage, opt.output_path)
+    # 注意：env 的 MultipleEnvironments 已移除 output_path，不再录制视频
+    envs = MultipleEnvironments(opt.action_type, opt.num_processes, curr_world, curr_stage)
 
-    # 只使用 RIGHT_ONLY 的动作数量
     num_actions = len(RIGHT_ONLY)
     num_states = 4
 
@@ -96,23 +93,22 @@ def train(opt):
         model.cuda()
     model.share_memory()
 
-    # Start evaluation process (eval 会接收 opt.output_path，且已在 src/process.py 中移除 env.render())
+    # 启动评估进程（评估内已禁用渲染；若仍使用旧 process.py，请确保其不调用 env.render）
     process = mp.Process(target=eval, args=(opt, model, num_states, num_actions))
     process.start()
 
-    # ===== 使用动态学习率初始化优化器 =====
+    # 动态学习率
     curr_lr = get_dynamic_lr(curr_world, curr_stage)
     optimizer = torch.optim.Adam(model.parameters(), lr=curr_lr)
     print(f"⚙️ 初始学习率设置为 {curr_lr}")
 
-    # Initialize environments
+    # 初始化状态
     [agent_conn.send(("reset", None)) for agent_conn in envs.agent_conns]
     curr_states_data = [agent_conn.recv() for agent_conn in envs.agent_conns]
     curr_states = torch.from_numpy(np.concatenate(curr_states_data, 0))
     if torch.cuda.is_available():
         curr_states = curr_states.cuda()
 
-    # 最近 5 个 episode 的通关记录（True/False）
     recent_passes = deque(maxlen=5)
 
     curr_episode = 0
@@ -125,7 +121,6 @@ def train(opt):
         rewards = []
         dones = []
 
-        # Track if level is cleared in this batch
         level_cleared_in_batch = False
 
         for _ in range(opt.num_local_steps):
@@ -150,7 +145,6 @@ def train(opt):
             done_list = [r[2] for r in step_results]
             info_list = [r[3] for r in step_results]
 
-            # Check for flag_get (Level Complete)
             for info in info_list:
                 if info.get("flag_get", False):
                     level_cleared_in_batch = True
@@ -223,23 +217,21 @@ def train(opt):
             f"Episode: {curr_episode}. World {curr_world}-{curr_stage}. Loss: {total_loss:.4f}. Avg Reward: {avg_reward:.2f}"
         )
 
-        # 记录本 episode 是否通关，并计算最近 5 个的通过率
         recent_passes.append(level_cleared_in_batch)
         pass_rate = sum(recent_passes) / len(recent_passes)
         print(f"📈 Recent pass rate (last {len(recent_passes)}): {pass_rate:.2f}")
 
-        # ===== 条件保存通用模型（仅当最近 5 个 episode 通过率 >= 0.7）=====
+        # 条件保存通用模型（仅当最近 5 个 episode 通过率 >= 0.7）
         if len(recent_passes) == recent_passes.maxlen and pass_rate >= 0.7:
-            # 必须改项：保存文件名统一带 .pth，保存目录统一为 opt.saved_path（默认 /kaggle/working）
             save_path = os.path.join(opt.saved_path, "ppo_super_mario_bros_continuous.pth")
             torch.save(model.state_dict(), save_path)
             print(f"✅ Pass rate >= 70%. General model saved to {save_path}")
 
-        # ===== Automatic Curriculum Switching =====
+        # 自动切关逻辑
         if level_cleared_in_batch:
             print(f"🎉 Level {curr_world}-{curr_stage} CLEARED! Switching level...")
 
-            # 仅当最近 5 个 episode 通过率 >= 70% 时，保存关卡专用模型
+            # 关卡专用模型（同样要求通过率 >= 70%）
             if len(recent_passes) == recent_passes.maxlen and pass_rate >= 0.7:
                 save_path = os.path.join(opt.saved_path, f"ppo_cleared_{curr_world}_{curr_stage}.pth")
                 torch.save(model.state_dict(), save_path)
@@ -247,36 +239,35 @@ def train(opt):
             else:
                 print("🟡 Pass rate below 70%. Skip saving checkpoint for this level.")
 
-            # 2. Advance to next level
+            # 进入下一关
             curr_stage += 1
             if curr_stage > 4:
                 curr_stage = 1
                 curr_world += 1
 
-            # 3. Close old environments to free memory
+            # 关闭旧环境
             print("🔄 Closing old environments...")
             envs.close()
 
-            # 4. Create new environments
+            # 创建新环境（不录视频）
             print(f"🚀 Switching to World {curr_world}-{curr_stage}")
-            envs = MultipleEnvironments(opt.action_type, opt.num_processes, curr_world, curr_stage, opt.output_path)
+            envs = MultipleEnvironments(opt.action_type, opt.num_processes, curr_world, curr_stage)
 
-            # 5. Reset new environments and state
+            # 重置新环境状态
             [agent_conn.send(("reset", None)) for agent_conn in envs.agent_conns]
             curr_states_data = [agent_conn.recv() for agent_conn in envs.agent_conns]
             curr_states = torch.from_numpy(np.concatenate(curr_states_data, 0))
             if torch.cuda.is_available():
                 curr_states = curr_states.cuda()
 
-            # 6. 同步更新学习率（根据新关卡）
+            # 更新学习率
             curr_lr = get_dynamic_lr(curr_world, curr_stage)
             for param_group in optimizer.param_groups:
                 param_group['lr'] = curr_lr
             print(f"🔧 学习率更新为 {curr_lr} (World {curr_world}-{curr_stage})")
 
-            # Reset episode count for the new level (optional)
+            # 重置计数与历史通过记录
             curr_episode = 0
-            # 清空历史通过记录，避免跨关卡统计混淆
             recent_passes.clear()
 
 
