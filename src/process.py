@@ -29,7 +29,7 @@ def eval(opt, global_model, num_states, num_actions):
         actions = COMPLEX_MOVEMENT
 
     # 创建评估环境，传入 output_path 以保证路径一致（例如 /kaggle/working/output）
-    env = create_train_env(actions, opt.world, opt.stage, output_path=opt.output_path)
+    env = create_train_env(actions, opt.world, opt.stage)
 
     local_model = PPO(num_states, num_actions)
     if torch.cuda.is_available():
