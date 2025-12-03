@@ -3,7 +3,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 import gym_super_mario_bros
 from nes_py.wrappers import JoypadSpace
-from gym_super_mario_bros.actions import RIGHT_ONLY
+from gym_super_mario_bros.actions import RIGHT_ONLY, SIMPLE_MOVEMENT, COMPLEX_MOVEMENT
 from gym import Wrapper
 from gym.spaces import Box
 import cv2
@@ -11,21 +11,21 @@ import numpy as np
 import torch.multiprocessing as mp
 
 
-# ===== Frame preprocessing =====
+# ===== Frame preprocessing [优化1: 保持 uint8] =====
 def process_frame(frame):
     if frame is not None:
         frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-        frame = cv2.resize(frame, (84, 84))[None, :, :] / 255.0
-        return frame.astype(np.float32)
-    return np.zeros((1, 84, 84), dtype=np.float32)
+        frame = cv2.resize(frame, (84, 84))
+        # [优化1] 不除以 255.0，保持 uint8 以节省多进程传输带宽
+        return frame[None, :, :].astype(np.uint8)
+    return np.zeros((1, 84, 84), dtype=np.uint8)
 
 
-# ===== Custom Reward Wrapper =====
+# ===== Custom Reward Wrapper [优化2: 重构奖励] =====
 class CustomReward(Wrapper):
     def __init__(self, env):
         super(CustomReward, self).__init__(env)
-        self.observation_space = Box(low=0, high=255, shape=(1, 84, 84))
-        self.curr_score = 0
+        self.observation_space = Box(low=0, high=255, shape=(1, 84, 84), dtype=np.uint8)
         self.current_x = 40
         self.world = 1
         self.stage = 1
@@ -42,51 +42,58 @@ class CustomReward(Wrapper):
         state, reward, done, info = self.env.step(action)
         state = process_frame(state)
 
-        level_type = self.get_level_type(self.world, self.stage)
+        # 获取环境信息
         x_pos = info.get("x_pos", 0)
         y_pos = info.get("y_pos", 0)
-        score = info.get("score", 0)
+        
+        # [优化2] 奖励重构
+        # 1. 基础距离奖励 (只看 Delta)
+        delta_x = x_pos - self.current_x
+        reward = delta_x 
 
-        # stay-in-place penalty
+        # 2. 死亡判定与惩罚
+        if done:
+            if info.get("flag_get", False):
+                reward += 15.0  # 通关奖励
+            else:
+                reward -= 15.0  # 死亡惩罚 (比原本的 -50 温和，配合 clip 使用)
+        
+        # 3. 时间/生存惩罚 (鼓励快速通关)
+        reward -= 0.1
+
+        # 4. 原地不动惩罚 (防止卡死)
         if x_pos == self.last_x:
             self.stay_counter += 1
         else:
             self.stay_counter = 0
-        self.last_x = x_pos
-        if self.stay_counter >= 40:
-            reward -= 50
+        
+        if self.stay_counter >= 40: # 连续40帧(跳帧后)不动
+            reward -= 10.0 # 额外惩罚
             done = True
 
-        if level_type == "linear":
-            reward += (score - self.curr_score) / 40.0
-            if x_pos > self.current_x:
-                reward += (x_pos - self.current_x) * 0.01
-            elif x_pos < self.current_x:
-                reward -= (self.current_x - x_pos) * 0.005
-        elif level_type == "maze":
-            pos_key = (x_pos // 10, y_pos // 10)
-            if pos_key not in self.visited_positions:
-                reward += 0.2
-                self.visited_positions.add(pos_key)
-            reward -= 0.01
+        self.last_x = x_pos
+        self.current_x = x_pos
 
-        if done:
-            if info.get("flag_get", False):
-                reward += 50
-            else:
-                reward -= 50
+        # [优化2] Reward Clipping: 限制在 [-5, 5] 之间，防止梯度爆炸
+        reward = np.clip(reward, -5.0, 5.0)
 
+        # 更新关卡信息
         if "world" in info and "stage" in info:
             self.world = info["world"]
             self.stage = info["stage"]
 
-        self.curr_score = score
-        self.current_x = x_pos
-        return state, reward / 10.0, done, info
+        # 迷宫关卡特殊处理 (如 1-4)
+        if self.get_level_type(self.world, self.stage) == "maze":
+            pos_key = (x_pos // 10, y_pos // 10)
+            if pos_key not in self.visited_positions:
+                reward += 1.0 # 鼓励探索新区域
+                self.visited_positions.add(pos_key)
+            reward -= 0.1 # 迷宫中额外的时间压力
+
+        return state, reward, done, info
 
     def reset(self):
         state = self.env.reset()
-        self.curr_score = 0
         self.current_x = 40
         self.visited_positions.clear()
         self.stay_counter = 0
@@ -98,9 +105,9 @@ class CustomReward(Wrapper):
 class CustomSkipFrame(Wrapper):
     def __init__(self, env, skip=4):
         super(CustomSkipFrame, self).__init__(env)
-        self.observation_space = Box(low=0, high=255, shape=(skip, 84, 84))
+        self.observation_space = Box(low=0, high=255, shape=(skip, 84, 84), dtype=np.uint8)
         self.skip = skip
-        self.states = np.zeros((skip, 84, 84), dtype=np.float32)
+        self.states = np.zeros((skip, 84, 84), dtype=np.uint8)
 
     def step(self, action):
         total_reward = 0.0
@@ -116,32 +123,33 @@ class CustomSkipFrame(Wrapper):
 
         if done:
             self.reset()
-            return self.states[None, :, :, :].astype(np.float32), total_reward, done, info
+            # 注意: 如果 done, total_reward 可能包含这一步的死亡惩罚
+            return self.states[None, :, :, :], total_reward, done, info
 
         max_state = np.max(np.concatenate(last_states, axis=0), axis=0)
         self.states[:-1] = self.states[1:]
         self.states[-1] = max_state
-        return self.states[None, :, :, :].astype(np.float32), total_reward, done, info
+        return self.states[None, :, :, :], total_reward, done, info
 
     def reset(self):
         state = self.env.reset()
         self.states = np.concatenate([state for _ in range(self.skip)], axis=0)
-        return self.states[None, :, :, :].astype(np.float32)
+        return self.states[None, :, :, :]
 
 
-# ===== Create Environment (Force RIGHT_ONLY actions) =====
+# ===== Create Environment =====
 def create_train_env(actions, world, stage):
-    env_id = f"SuperMarioBros-{world}-{stage}-v3"  # 使用 v3，避免旧 API 警告
+    env_id = f"SuperMarioBros-{world}-{stage}-v3"
     env = gym_super_mario_bros.make(env_id)
-    env = JoypadSpace(env, RIGHT_ONLY)
+    env = JoypadSpace(env, actions) # 使用传入的 actions
     env = CustomReward(env)
     env = CustomSkipFrame(env)
     return env
 
 
-# ===== Worker for Multiprocessing =====
-def worker(conn, action_type, world, stage, worker_id=0):
-    actions = RIGHT_ONLY
+# ===== Worker for Multiprocessing [优化4: 修正动作传递] =====
+def worker(conn, actions, world, stage, worker_id=0):
+    # [优化4] 之前这里硬编码了 RIGHT_ONLY，现在使用传入的 actions
     env = create_train_env(actions, world, stage)
 
     try:
@@ -171,8 +179,17 @@ class MultipleEnvironments:
     def __init__(self, action_type, num_envs, world=1, stage=1):
         self.action_type = action_type
         self.num_envs = num_envs
-        self.num_actions = len(RIGHT_ONLY)
-        self.num_states = 4
+        
+        # [优化4] 根据参数确定动作空间
+        if action_type == "right":
+            self.actions = RIGHT_ONLY
+        elif action_type == "simple":
+            self.actions = SIMPLE_MOVEMENT
+        else:
+            self.actions = COMPLEX_MOVEMENT
+            
+        self.num_actions = len(self.actions)
+        self.num_states = 4 # Stacked frames
 
         self.agent_conns, env_conns = zip(*[mp.Pipe() for _ in range(num_envs)])
         self.processes = []
@@ -180,7 +197,7 @@ class MultipleEnvironments:
         for idx in range(num_envs):
             p = mp.Process(
                 target=worker,
-                args=(env_conns[idx], "right", world, stage, idx)
+                args=(env_conns[idx], self.actions, world, stage, idx) # 传入 self.actions
             )
             p.daemon = True
             p.start()

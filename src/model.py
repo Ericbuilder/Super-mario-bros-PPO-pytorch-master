@@ -18,11 +18,13 @@ class PPO(nn.Module):
         for module in self.modules():
             if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear):
                 nn.init.orthogonal_(module.weight, nn.init.calculate_gain('relu'))
-                # nn.init.xavier_uniform_(module.weight)
-                # nn.init.kaiming_uniform_(module.weight)
                 nn.init.constant_(module.bias, 0)
 
     def forward(self, x):
+        # [优化1] 在 GPU/模型内部进行归一化
+        # 输入 x 是 uint8 (0-255), 转换为 float 并除以 255.0
+        x = x.float() / 255.0
+        
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
