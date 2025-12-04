@@ -21,7 +21,7 @@ def process_frame(frame):
     return np.zeros((1, 84, 84), dtype=np.uint8)
 
 
-# ===== Custom Reward Wrapper (方案 A + D 实现核心) =====
+# ===== Custom Reward Wrapper (回滚到基础版本) =====
 class CustomReward(Wrapper):
     def __init__(self, env):
         super(CustomReward, self).__init__(env)
@@ -30,20 +30,9 @@ class CustomReward(Wrapper):
         self.world = 1
         self.stage = 1
         
-        # [方案 D] 迷宫探索记录 (记录访问过的 grid 坐标)
-        self.visited_positions = set()
-        
-        # [方案 A] 线性关卡突破记录 (记录本局最远 X 坐标)
-        self.max_x_reached = 40 
-        
+        # 移除了复杂的探索记录，回归纯粹的位置判断
         self.stay_counter = 0
         self.last_x = 40
-
-    def get_level_type(self, world, stage):
-        # 定义迷宫关卡，通常是 x-4 (城堡)
-        if stage == 4:
-            return "maze"
-        return "linear"
 
     def step(self, action):
         state, reward, done, info = self.env.step(action)
@@ -51,50 +40,24 @@ class CustomReward(Wrapper):
 
         # 获取环境信息
         x_pos = info.get("x_pos", 0)
-        y_pos = info.get("y_pos", 0)
         
         # --- 1. 基础距离奖励 (Delta X) ---
-        # 即使在迷宫中，向右也是大方向，所以保留基础 delta
+        # 对于 1-1 这种线性关卡，这是最核心的驱动力
         delta_x = x_pos - self.current_x
         reward = delta_x 
 
-        # --- 2. 基于关卡类型的特殊奖励 (Scheme A & D) ---
-        level_type = self.get_level_type(self.world, self.stage)
+        # --- 2. 时间与生存惩罚 ---
+        # 每一帧都给予微小的惩罚，强迫 AI 跑起来，不要原地磨蹭
+        reward -= 0.1 
 
-        if level_type == "linear":
-            # === [方案 A: Milestone Reward] ===
-            # 如果当前位置超过了本局历史最远位置，给予额外奖励
-            # 这对于解决 2-1 这种"掉坑恐惧症"非常有效
-            if x_pos > self.max_x_reached:
-                reward += 0.5  # 突破奖励
-                self.max_x_reached = x_pos
-                
-        elif level_type == "maze":
-            # === [方案 D: Maze Grid Exploration] ===
-            # 将地图划分为 10x10 的网格
-            # 只要进入新的网格(无论是向右还是向上/向下)，都给予奖励
-            pos_key = (x_pos // 10, y_pos // 10)
-            if pos_key not in self.visited_positions:
-                reward += 1.0 # 发现新区域的大奖励，鼓励上下探索
-                self.visited_positions.add(pos_key)
-            
-            # 迷宫中稍微增加一点时间压力，防止为了刷分而在两个格子里反复横跳(虽然set解决了重复，但防止磨蹭)
-            reward -= 0.1
-
-        # --- 3. 通用惩罚与奖励 ---
-        
-        # 基础时间压力 (所有关卡)
-        reward -= 0.05 
-
-        # 死亡与通关
+        # --- 3. 死亡与通关 ---
         if done:
             if info.get("flag_get", False):
-                reward += 15.0 # 通关大奖
+                reward += 15.0 # 通关奖励
             else:
-                reward -= 15.0 # 死亡惩罚
+                reward -= 15.0 # 死亡惩罚 (数值不需要太大，clip 会限制它)
 
-        # 防卡死 (Stay Penalty)
-        # 如果连续 100 帧(约 25 步)位移小于 2 像素
+        # --- 4. 防卡死 (Stay Penalty) ---
         if abs(x_pos - self.last_x) < 2: 
             self.stay_counter += 1
         else:
@@ -102,18 +65,18 @@ class CustomReward(Wrapper):
         
         if self.stay_counter >= 100: 
             reward -= 10.0 # 强制惩罚
-            done = True    # 强制结束，防止无效训练
+            done = True    # 强制结束
 
-        # --- 4. 状态更新 ---
+        # --- 5. 状态更新 ---
         self.last_x = x_pos
         self.current_x = x_pos
         
-        # 更新 World/Stage 信息
         if "world" in info:
             self.world = info["world"]
             self.stage = info["stage"]
 
-        # Reward Clipping: 限制奖励范围，稳定梯度
+        # Reward Clipping: 限制在 [-5, 5]
+        # 这对于 PPO 的稳定性至关重要，防止某个异常样本破坏梯度
         reward = np.clip(reward, -5.0, 5.0)
 
         return state, reward, done, info
@@ -121,14 +84,12 @@ class CustomReward(Wrapper):
     def reset(self):
         state = self.env.reset()
         self.current_x = 40
-        self.max_x_reached = 40 # 重置方案 A 记录
-        self.visited_positions.clear() # 重置方案 D 记录
         self.stay_counter = 0
         self.last_x = 40
         return process_frame(state)
 
 
-# ===== Frame Skipping =====
+# ===== Frame Skipping (保持不变) =====
 class CustomSkipFrame(Wrapper):
     def __init__(self, env, skip=4):
         super(CustomSkipFrame, self).__init__(env)
@@ -168,7 +129,7 @@ def create_train_env(actions, world, stage):
     env_id = f"SuperMarioBros-{world}-{stage}-v3"
     env = gym_super_mario_bros.make(env_id)
     env = JoypadSpace(env, actions)
-    env = CustomReward(env)     # 此时加载的是包含方案 A+D 的新 Reward
+    env = CustomReward(env)
     env = CustomSkipFrame(env)
     return env
 
@@ -176,7 +137,6 @@ def create_train_env(actions, world, stage):
 # ===== Worker for Multiprocessing =====
 def worker(conn, actions, world, stage, worker_id=0):
     env = create_train_env(actions, world, stage)
-
     try:
         while True:
             cmd, data = conn.recv()
