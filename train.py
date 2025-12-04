@@ -19,7 +19,6 @@ import shutil
 
 def get_args():
     parser = argparse.ArgumentParser()
-    # 默认动作改为 simple，支持更复杂的动作
     parser.add_argument("--action_type", type=str, default="simple", choices=["right", "simple", "complex"])
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--gamma', type=float, default=0.9)
@@ -31,12 +30,15 @@ def get_args():
     parser.add_argument("--num_local_steps", type=int, default=512)
     parser.add_argument("--num_global_steps", type=int, default=int(5e6))
     parser.add_argument("--num_processes", type=int, default=8)
-    parser.add_argument("--save_interval", type=int, default=50) # 定期保存间隔
+    parser.add_argument("--save_interval", type=int, default=50)
     parser.add_argument("--max_actions", type=int, default=200)
     parser.add_argument("--log_path", type=str, default="tensorboard/ppo_super_mario_bros")
     parser.add_argument("--saved_path", type=str, default="/kaggle/working")
     parser.add_argument("--world", type=int, default=1)
     parser.add_argument("--stage", type=int, default=1)
+    
+    # [新增] 加载模型参数，支持断点续训
+    parser.add_argument("--load_model", type=str, default="", help="Path to a .pth file to resume training")
 
     args = parser.parse_args()
     return args
@@ -68,13 +70,25 @@ def train(opt):
     
     envs = MultipleEnvironments(opt.action_type, opt.num_processes, opt.world, opt.stage)
 
-    # 从 envs 获取正确的动作数量
     num_actions = envs.num_actions
     num_states = 4
 
     model = PPO(num_states, num_actions)
     if torch.cuda.is_available():
         model.cuda()
+    
+    # [新增] 加载已有模型权重
+    if opt.load_model:
+        if os.path.isfile(opt.load_model):
+            print(f"📥 Loading model from {opt.load_model}...")
+            if torch.cuda.is_available():
+                model.load_state_dict(torch.load(opt.load_model))
+            else:
+                model.load_state_dict(torch.load(opt.load_model, map_location='cpu'))
+            print("✅ Model loaded successfully! Resuming training...")
+        else:
+            print(f"⚠️ Warning: Model file {opt.load_model} not found. Starting from scratch.")
+
     model.share_memory()
 
     process = mp.Process(target=eval, args=(opt, model, num_states, num_actions))
@@ -191,20 +205,16 @@ def train(opt):
 
         print(f"Ep: {curr_episode}. World {opt.world}-{opt.stage}. Loss: {total_loss:.4f}. Reward: {avg_reward:.2f}")
 
-        # 1. 定期保存 (Periodic Save)
         if curr_episode % opt.save_interval == 0:
             save_path = os.path.join(opt.saved_path, f"ppo_mario_simple_{opt.world}_{opt.stage}.pth")
             torch.save(model.state_dict(), save_path)
             print(f"💾 Periodic save: {save_path}")
 
-        # 2. 自动切关与通关保存 (Clear Save)
         if level_cleared_in_batch:
-            # --- [新增] 通关即刻保存 ---
             cleared_model_name = f"ppo_cleared_w{opt.world}_s{opt.stage}.pth"
             cleared_save_path = os.path.join(opt.saved_path, cleared_model_name)
             torch.save(model.state_dict(), cleared_save_path)
             print(f"🏆 Level {opt.world}-{opt.stage} CLEARED! Model saved to {cleared_save_path}")
-            # ---------------------------
 
             print(f"🎉 Switching level...")
             opt.stage += 1
