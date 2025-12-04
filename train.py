@@ -19,7 +19,7 @@ import shutil
 
 def get_args():
     parser = argparse.ArgumentParser()
-    # [优化4] 默认动作改为 simple，支持更复杂的动作
+    # 默认动作改为 simple，支持更复杂的动作
     parser.add_argument("--action_type", type=str, default="simple", choices=["right", "simple", "complex"])
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--gamma', type=float, default=0.9)
@@ -64,7 +64,6 @@ def train(opt):
 
     mp = _mp.get_context("spawn")
 
-    # [优化4] 移除 opt.action_type = "right" 的硬编码，使用参数控制
     print(f"🚀 Starting training on World {opt.world}-{opt.stage} with Action Type: {opt.action_type}")
     
     envs = MultipleEnvironments(opt.action_type, opt.num_processes, opt.world, opt.stage)
@@ -89,7 +88,7 @@ def train(opt):
     curr_states_data = [agent_conn.recv() for agent_conn in envs.agent_conns]
     curr_states = torch.from_numpy(np.concatenate(curr_states_data, 0))
     if torch.cuda.is_available():
-        curr_states = curr_states.cuda() # 此时还是 uint8/ByteTensor (如果转换了的话) 或者 FloatTensor
+        curr_states = curr_states.cuda()
 
     curr_episode = 0
     while True:
@@ -192,15 +191,22 @@ def train(opt):
 
         print(f"Ep: {curr_episode}. World {opt.world}-{opt.stage}. Loss: {total_loss:.4f}. Reward: {avg_reward:.2f}")
 
-        # 定期保存
+        # 1. 定期保存 (Periodic Save)
         if curr_episode % opt.save_interval == 0:
             save_path = os.path.join(opt.saved_path, f"ppo_mario_simple_{opt.world}_{opt.stage}.pth")
             torch.save(model.state_dict(), save_path)
-            print(f"💾 Model saved to {save_path}")
+            print(f"💾 Periodic save: {save_path}")
 
-        # 自动切关
+        # 2. 自动切关与通关保存 (Clear Save)
         if level_cleared_in_batch:
-            print(f"🎉 Level {opt.world}-{opt.stage} CLEARED! Switching level...")
+            # --- [新增] 通关即刻保存 ---
+            cleared_model_name = f"ppo_cleared_w{opt.world}_s{opt.stage}.pth"
+            cleared_save_path = os.path.join(opt.saved_path, cleared_model_name)
+            torch.save(model.state_dict(), cleared_save_path)
+            print(f"🏆 Level {opt.world}-{opt.stage} CLEARED! Model saved to {cleared_save_path}")
+            # ---------------------------
+
+            print(f"🎉 Switching level...")
             opt.stage += 1
             if opt.stage > 4:
                 opt.stage = 1
