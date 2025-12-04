@@ -51,7 +51,7 @@ def eval(opt, global_model, num_states, num_actions):
 
         state_np, reward, done, info = env.step(action)
         
-        # 只保留通关提示，移除其他的繁琐日志
+        # 仅保留通关提示
         if info.get("flag_get", False):
             print(f"✅ Eval CLEARED Level {opt.world}-{opt.stage} at step {curr_step}!")
 
