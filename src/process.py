@@ -37,7 +37,6 @@ def eval(opt, global_model, num_states, num_actions):
 
     done = True
     curr_step = 0
-    total_reward = 0  # [新增] 记录评估总分
     actions_deque = deque(maxlen=opt.max_actions)
 
     while True:
@@ -51,8 +50,8 @@ def eval(opt, global_model, num_states, num_actions):
             action = torch.argmax(policy).item()
 
         state_np, reward, done, info = env.step(action)
-        total_reward += reward # [新增] 累加分数
-
+        
+        # 只保留通关提示，移除其他的繁琐日志
         if info.get("flag_get", False):
             print(f"✅ Eval CLEARED Level {opt.world}-{opt.stage} at step {curr_step}!")
 
@@ -61,13 +60,7 @@ def eval(opt, global_model, num_states, num_actions):
             done = True
 
         if done:
-            # [新增] 打印本次评估结果 (仅当分数较高或偶尔打印，防止刷屏，这里设置为每局都打印方便调试 2-1)
-            # 对于 2-1，能达到 5 分以上就很不错了
-            if total_reward > 5.0 or info.get("flag_get", False):
-                 print(f"🔍 Eval finished: Reward {total_reward:.2f}, Steps {curr_step}")
-            
             curr_step = 0
-            total_reward = 0
             actions_deque.clear()
             state_np = env.reset()
 
