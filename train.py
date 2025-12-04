@@ -37,7 +37,7 @@ def get_args():
     parser.add_argument("--world", type=int, default=1)
     parser.add_argument("--stage", type=int, default=1)
     
-    # [新增] 加载模型参数，支持断点续训
+    # 保持断点续训功能
     parser.add_argument("--load_model", type=str, default="", help="Path to a .pth file to resume training")
 
     args = parser.parse_args()
@@ -77,7 +77,7 @@ def train(opt):
     if torch.cuda.is_available():
         model.cuda()
     
-    # [新增] 加载已有模型权重
+    # 加载模型逻辑
     if opt.load_model:
         if os.path.isfile(opt.load_model):
             print(f"📥 Loading model from {opt.load_model}...")
@@ -211,6 +211,7 @@ def train(opt):
             print(f"💾 Periodic save: {save_path}")
 
         if level_cleared_in_batch:
+            # 通关保存
             cleared_model_name = f"ppo_cleared_w{opt.world}_s{opt.stage}.pth"
             cleared_save_path = os.path.join(opt.saved_path, cleared_model_name)
             torch.save(model.state_dict(), cleared_save_path)
