@@ -21,10 +21,8 @@ class PPO(nn.Module):
                 nn.init.constant_(module.bias, 0)
 
     def forward(self, x):
-        # [优化1] 在 GPU/模型内部进行归一化
-        # 输入 x 是 uint8 (0-255), 转换为 float 并除以 255.0
+        # 关键：在这里进行归一化
         x = x.float() / 255.0
-        
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
