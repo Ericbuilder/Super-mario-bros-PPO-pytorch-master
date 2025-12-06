@@ -16,76 +16,82 @@ def process_frame(frame):
     if frame is not None:
         frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
         frame = cv2.resize(frame, (84, 84))
-        # 保持 uint8，不除以 255.0，节省带宽
+        # 保持 uint8 (0-255)，不除以 255.0，节省传输带宽
+        # 注意：这意味着 model.py 中必须进行归一化 (/ 255.0)
         return frame[None, :, :].astype(np.uint8)
     return np.zeros((1, 84, 84), dtype=np.uint8)
 
 
-# ===== Custom Reward Wrapper (回滚到基础版本) =====
+# ===== Custom Reward Wrapper (逻辑恢复为原版) =====
 class CustomReward(Wrapper):
     def __init__(self, env):
         super(CustomReward, self).__init__(env)
+        # 观测空间保持 uint8 以匹配 process_frame
         self.observation_space = Box(low=0, high=255, shape=(1, 84, 84), dtype=np.uint8)
+        self.curr_score = 0
         self.current_x = 40
         self.world = 1
         self.stage = 1
-        
-        # 移除了复杂的探索记录，回归纯粹的位置判断
-        self.stay_counter = 0
-        self.last_x = 40
 
     def step(self, action):
         state, reward, done, info = self.env.step(action)
         state = process_frame(state)
 
-        # 获取环境信息
+        # [原版逻辑 1] 基于分数的奖励
+        # 这种逻辑鼓励吃金币和踩怪，原版认为这对线性关卡有辅助作用
+        reward += (info.get("score", 0) - self.curr_score) / 40.0
+        self.curr_score = info.get("score", 0)
+
+        # [原版逻辑 2] 向前移动的微小奖励
+        # 权重设得很小 (0.01)，避免距离奖励掩盖了分数的奖励
         x_pos = info.get("x_pos", 0)
-        
-        # --- 1. 基础距离奖励 (Delta X) ---
-        # 对于 1-1 这种线性关卡，这是最核心的驱动力
-        delta_x = x_pos - self.current_x
-        reward = delta_x 
+        if x_pos > self.current_x:
+            reward += (x_pos - self.current_x) * 0.01
+        elif x_pos < self.current_x:
+            reward -= (self.current_x - x_pos) * 0.005 # 后退惩罚更小
 
-        # --- 2. 时间与生存惩罚 ---
-        # 每一帧都给予微小的惩罚，强迫 AI 跑起来，不要原地磨蹭
-        reward -= 0.1 
-
-        # --- 3. 死亡与通关 ---
+        # [原版逻辑 3] 死亡与通关
+        # 原版使用的是较大的 +/- 50
         if done:
             if info.get("flag_get", False):
-                reward += 15.0 # 通关奖励
+                reward += 50
             else:
-                reward -= 15.0 # 死亡惩罚 (数值不需要太大，clip 会限制它)
+                reward -= 50
 
-        # --- 4. 防卡死 (Stay Penalty) ---
-        if abs(x_pos - self.last_x) < 2: 
-            self.stay_counter += 1
-        else:
-            self.stay_counter = 0
-        
-        if self.stay_counter >= 100: 
-            reward -= 10.0 # 强制惩罚
-            done = True    # 强制结束
-
-        # --- 5. 状态更新 ---
-        self.last_x = x_pos
-        self.current_x = x_pos
-        
-        if "world" in info:
+        # 更新世界/关卡信息
+        if "world" in info and "stage" in info:
             self.world = info["world"]
             self.stage = info["stage"]
 
-        # Reward Clipping: 限制在 [-5, 5]
-        # 这对于 PPO 的稳定性至关重要，防止某个异常样本破坏梯度
-        reward = np.clip(reward, -5.0, 5.0)
+        # [原版逻辑 4] 硬编码的死亡区域 (Hard-coded death zones)
+        # 针对 7-4 和 4-4 的特定陷阱判断，保留原版逻辑
+        if self.world == 7 and self.stage == 4:
+            if (506 <= x_pos <= 832 and info["y_pos"] > 127) or \
+               (832 < x_pos <= 1064 and info["y_pos"] < 80) or \
+               (1113 < x_pos <= 1464 and info["y_pos"] < 191) or \
+               (1579 < x_pos <= 1943 and info["y_pos"] < 191) or \
+               (1946 < x_pos <= 1964 and info["y_pos"] >= 191) or \
+               (1984 < x_pos <= 2060 and (info["y_pos"] >= 191 or info["y_pos"] < 127)) or \
+               (2114 < x_pos < 2440 and info["y_pos"] < 191) or \
+               x_pos < self.current_x - 500:
+                reward -= 50
+                done = True
+        elif self.world == 4 and self.stage == 4:
+            if (x_pos <= 1500 and info["y_pos"] < 127) or \
+               (1588 <= x_pos < 2380 and info["y_pos"] >= 127):
+                reward = -50
+                done = True
 
-        return state, reward, done, info
+        self.current_x = x_pos
+        
+        # [原版逻辑 5] 最终缩放
+        # 原版是直接除以 10.0，而不是用 np.clip
+        return state, reward / 10.0, done, info
 
     def reset(self):
         state = self.env.reset()
+        self.curr_score = 0
         self.current_x = 40
-        self.stay_counter = 0
-        self.last_x = 40
         return process_frame(state)
 
 
