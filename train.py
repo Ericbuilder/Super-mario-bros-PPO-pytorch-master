@@ -228,7 +228,7 @@ def train(opt):
             print(f"🏆 Level {opt.world}-{opt.stage} CLEARED! Model saved to {cleared_save_path}")
             
             # 1-2 通关很难，如果不切关可以注释掉下面这行，继续刷分
-            # envs.close()
+            envs.close()
             # ... (切关逻辑保持不变)
             
             curr_episode = 0
