@@ -13,7 +13,6 @@ import numpy as np
 import cv2
 import subprocess as sp
 
-# 保持 Monitor 类不变...
 class Monitor:
     def __init__(self, width, height, saved_path):
         self.command = [
@@ -38,7 +37,6 @@ class Monitor:
             except Exception:
                 pass
 
-# [优化1: 同步更新]
 def process_frame(frame):
     if frame is not None:
         frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
@@ -49,10 +47,11 @@ def process_frame(frame):
 
 def get_args():
     parser = argparse.ArgumentParser()
-    # [优化4: 默认 simple]
+    # [修改] 默认使用 simple 动作空间
     parser.add_argument("--action_type", type=str, default="simple", choices=["right", "simple", "complex"])
     parser.add_argument("--saved_path", type=str, default="/kaggle/working")
     parser.add_argument("--output_path", type=str, default="/kaggle/working/output")
+    # 注意：请确保 model_name 对应的是用 simple 训练出来的模型
     parser.add_argument("--model_name", type=str, default="ppo_mario_simple_1_1.pth")
     parser.add_argument("--world", type=int, default=1)
     parser.add_argument("--stage", type=int, default=1)
@@ -78,7 +77,6 @@ def test(opt):
     monitor = Monitor(256, 240, video_path)
     env = JoypadSpace(env, actions)
 
-    # 简单的 TestWrapper 用于录制
     class TestWrapper:
         def __init__(self, env, monitor):
             self.env = env
@@ -103,17 +101,21 @@ def test(opt):
     num_actions = len(actions)
     model = PPO(num_states, num_actions)
 
-    if torch.cuda.is_available():
-        model.load_state_dict(torch.load(model_path))
-        model.cuda()
+    if os.path.isfile(model_path):
+        print(f"📥 Loading model from {model_path}...")
+        if torch.cuda.is_available():
+            model.load_state_dict(torch.load(model_path))
+            model.cuda()
+        else:
+            model.load_state_dict(torch.load(model_path, map_location="cpu"))
     else:
-        model.load_state_dict(torch.load(model_path, map_location="cpu"))
+        print(f"⚠️ Model file not found: {model_path}. Running with random weights.")
+
     model.eval()
 
     obs = env.reset()
-    # 注意: process_frame 返回的是单帧 uint8 (1, 84, 84)
-    # 测试时我们需要 stack 4帧。这里简化处理，直接复制4次作为初始状态
     frame = process_frame(obs)
+    # Stack 4 frames
     state = np.concatenate([frame for _ in range(4)], axis=0)
     state = torch.from_numpy(state).unsqueeze(0) # (1, 4, 84, 84)
 
@@ -131,13 +133,12 @@ def test(opt):
 
         obs, reward, done, info = env.step(action)
         
-        # 更新状态：滚动
+        # Update state: roll buffer
         next_frame = process_frame(obs)
         next_frame_torch = torch.from_numpy(next_frame).unsqueeze(0)
         if torch.cuda.is_available():
             next_frame_torch = next_frame_torch.cuda()
         
-        # 移除最早的一帧，加入新的一帧
         state = torch.cat((state[:, 1:, :, :], next_frame_torch), dim=1)
 
         if info.get("flag_get", False):
