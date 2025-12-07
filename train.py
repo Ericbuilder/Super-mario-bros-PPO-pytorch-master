@@ -15,10 +15,12 @@ from torch.distributions import Categorical
 import torch.nn.functional as F
 import numpy as np
 import shutil
+from gym_super_mario_bros.actions import SIMPLE_MOVEMENT, COMPLEX_MOVEMENT, RIGHT_ONLY
 
 
 def get_args():
     parser = argparse.ArgumentParser()
+    # [修改] 默认 action_type 改为 "simple" (7个动作)，放弃 "right"
     parser.add_argument("--action_type", type=str, default="simple", choices=["right", "simple", "complex"])
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--gamma', type=float, default=0.9)
@@ -37,7 +39,7 @@ def get_args():
     parser.add_argument("--world", type=int, default=1)
     parser.add_argument("--stage", type=int, default=1)
     
-    # 保持断点续训功能
+    # 断点续训功能
     parser.add_argument("--load_model", type=str, default="", help="Path to a .pth file to resume training")
 
     args = parser.parse_args()
